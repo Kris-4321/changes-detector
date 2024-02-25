@@ -34,10 +34,19 @@ type Competitor struct {
 	ID string `json:"oid"`
 }
 
-func Hash(ids []string) string {
-	joined := strings.Join(ids, "")
-	hash := sha256.Sum256([]byte(joined))
-	return hex.EncodeToString(hash[:])
+func GetPages(page int) ([]byte, error) {
+	url := fmt.Sprintf("https://webapi.intelligencenode.com//breuninger?page=%d&app_key=213c06c51ed7df6fDEB", page)
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("end")
+	}
+
+	return ioutil.ReadAll(resp.Body)
 }
 
 func main() {
@@ -49,36 +58,46 @@ func main() {
 	defer client.Disconnect(context.TODO())
 	collection := client.Database(dbname).Collection(collectionname)
 
-	res, err := http.Get("https://webapi.intelligencenode.com//breuninger?page=1&app_key=213c06c51ed7df6fDEB")
-	if err != nil {
-		log.Fatal(err)
-	}
-	defer res.Body.Close()
-
-	body, err := ioutil.ReadAll(res.Body)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	var skus Skus
-	if err := json.Unmarshal(body, &skus); err != nil {
-		log.Fatal(err)
-	}
-
-	for _, product := range skus.Products {
-		var ids []string
-		for _, comp := range product.Competitors {
-			ids = append(ids, comp.ID)
-		}
-		hashedidstring := Hash(ids)
-
-		_, err = collection.InsertOne(context.TODO(), bson.M{
-			"oid":                     product.ID,
-			"hashedcompetitorsstring": hashedidstring,
-		})
+	page := 1
+	for {
+		body, err := GetPages(page)
 		if err != nil {
-			log.Fatalf("failed to insert into mongodb %v", err)
+			log.Fatalf("error getting page %d %v", page, err)
 		}
-		fmt.Printf("data for product %s inserver \n", product.ID)
+		if len(body) == 0 {
+			break
+		}
+
+		var skus Skus
+		if err := json.Unmarshal(body, &skus); err != nil {
+			log.Fatal(err)
+		}
+		if len(skus.Products) == 0 {
+			break
+		}
+
+		for _, product := range skus.Products {
+			var ids []string
+			for _, comp := range product.Competitors {
+				ids = append(ids, comp.ID)
+			}
+			hashedidstring := Hash(ids)
+
+			_, err = collection.InsertOne(context.TODO(), bson.M{
+				"oid":                     product.ID,
+				"hashedcompetitorsstring": hashedidstring,
+			})
+			if err != nil {
+				log.Fatalf("failed to insert into mongodb %v", err)
+			}
+			fmt.Printf("data for product %s inserver \n", product.ID)
+		}
+		page++
 	}
+}
+
+func Hash(ids []string) string {
+	joined := strings.Join(ids, "")
+	hash := sha256.Sum256([]byte(joined))
+	return hex.EncodeToString(hash[:])
 }
