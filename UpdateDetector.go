@@ -43,7 +43,7 @@ func GetPages(page int) ([]byte, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("end")
+		return nil, fmt.Errorf("end of pages")
 	}
 
 	return ioutil.ReadAll(resp.Body)
@@ -72,9 +72,6 @@ func main() {
 		if err := json.Unmarshal(body, &skus); err != nil {
 			log.Fatal(err)
 		}
-		if len(skus.Products) == 0 {
-			break
-		}
 
 		for _, product := range skus.Products {
 			var ids []string
@@ -94,6 +91,7 @@ func main() {
 		}
 		page++
 	}
+
 }
 
 func Hash(ids []string) string {
