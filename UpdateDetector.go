@@ -69,6 +69,7 @@ func main() {
 	defer client.Disconnect(context.TODO())
 	collection := client.Database(dbname).Collection(collectionname)
 
+	var updatedIDs []string
 	var update bson.M
 	var now time.Time
 	page := 1
@@ -76,7 +77,7 @@ func main() {
 		body, err := GetPages(page)
 		if err != nil {
 			log.Fatalf("got all pages")
-			break
+			continue
 		}
 		if len(body) == 0 {
 			break
@@ -115,13 +116,13 @@ func main() {
 							"last_update":             now,
 						},
 					}
+					updatedIDs = append(updatedIDs, product.ID)
 				}
 				_, err = collection.UpdateByID(context.TODO(), productObjectID, update)
 				if err != nil {
 					log.Printf("failed to update product %s %v", product.ID, err)
-					continue
 				}
-				fmt.Printf("updated product %s.", product.ID)
+				fmt.Printf("updated product %s. \n", product.ID)
 
 			} else if err == mongo.ErrNoDocuments {
 				_, err = collection.InsertOne(context.TODO(), bson.M{
@@ -139,6 +140,11 @@ func main() {
 
 		}
 		page++
+	}
+	if len(updatedIDs) == 0 {
+		fmt.Print("no updated items")
+	} else {
+		fmt.Print(strings.Join(updatedIDs, ", "))
 	}
 
 }
