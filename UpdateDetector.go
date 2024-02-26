@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"strings"
+	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -58,11 +59,14 @@ func main() {
 	defer client.Disconnect(context.TODO())
 	collection := client.Database(dbname).Collection(collectionname)
 
+	var result bson.M
+	var currentTime = time.Now()
+	var update bson.M
 	page := 1
 	for {
 		body, err := GetPages(page)
 		if err != nil {
-			log.Fatalf("error getting page %d %v", page, err)
+			log.Fatalf("got all pages")
 		}
 		if len(body) == 0 {
 			break
@@ -70,7 +74,7 @@ func main() {
 
 		var skus Skus
 		if err := json.Unmarshal(body, &skus); err != nil {
-			log.Fatal(err)
+			break
 		}
 
 		for _, product := range skus.Products {
@@ -78,23 +82,60 @@ func main() {
 			for _, comp := range product.Competitors {
 				ids = append(ids, comp.ID)
 			}
-			hashedidstring := Hash(ids)
+			hashedidstring := CalcHash(ids)
 
-			_, err = collection.InsertOne(context.TODO(), bson.M{
-				"oid":                     product.ID,
-				"hashedcompetitorsstring": hashedidstring,
-			})
-			if err != nil {
-				log.Fatalf("failed to insert into mongodb %v", err)
+			filter := bson.M{"_id": product.ID}
+			if err = collection.FindOne(context.TODO(), filter).Decode(&result); err == nil {
+				//ako existva pravi slednoto
+				filter = bson.M{"hashedcompetitorsstring": hashedidstring}
+
+				if err = collection.FindOne(context.TODO(), filter).Decode(&result); err == nil {
+					filter = bson.M{"_id": product.ID}
+					update = bson.M{
+						"$set": bson.M{
+							"oid":                     product.ID,
+							"hashedcompetitorsstring": hashedidstring,
+							"last_checked":            currentTime,
+						},
+					}
+					_, err = collection.UpdateByID(context.TODO(), filter, update)
+					if err != nil {
+						log.Fatalf("failed to insert new time into mongodb %v", err)
+					}
+					fmt.Printf("time checked updated for product %s", product.ID)
+
+				} else if err = collection.FindOne(context.TODO(), filter).Decode(&result); err != nil {
+					filter = bson.M{"_id": product.ID}
+					update = bson.M{
+						"set": bson.M{
+							"oid":                     product.ID,
+							"hashedcompetitorsstring": hashedidstring,
+							"last_checked":            currentTime,
+							"last_update":             currentTime,
+						},
+					}
+					fmt.Printf("updated time for checked and last update  for product %s", product.ID)
+				}
+			} else {
+				_, err = collection.InsertOne(context.TODO(), bson.M{
+					"oid":                     product.ID,
+					"hashedcompetitorsstring": hashedidstring,
+					"last_checked":            currentTime,
+					"last_update":             currentTime,
+				})
+				if err != nil {
+					log.Fatalf("failed to insert into mongodb %v", err)
+				}
+				fmt.Printf("data for product %s inserver \n", product.ID)
 			}
-			fmt.Printf("data for product %s inserver \n", product.ID)
+
 		}
 		page++
 	}
 
 }
 
-func Hash(ids []string) string {
+func CalcHash(ids []string) string {
 	joined := strings.Join(ids, "")
 	hash := sha256.Sum256([]byte(joined))
 	return hex.EncodeToString(hash[:])
