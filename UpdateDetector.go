@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
@@ -20,7 +22,6 @@ import (
 const (
 	dbname         = "updateadddb"
 	collectionname = "items"
-	dburl          = "mongodb://localhost:27017"
 )
 
 type Skus struct {
@@ -33,6 +34,13 @@ type Product struct {
 
 type Competitor struct {
 	ID string `json:"oid"`
+}
+
+var ProductFromDb struct {
+	ID           string    `bson:"_id"`
+	HashedString string    `bson:"hashedcompetitorsstring"`
+	Last_Checked time.Time `bson:"last_checked"`
+	Last_Updated time.Time `bson:"last_update"`
 }
 
 func GetPages(page int) ([]byte, error) {
@@ -52,21 +60,23 @@ func GetPages(page int) ([]byte, error) {
 
 func main() {
 
-	client, err := mongo.Connect(context.TODO(), options.Client().ApplyURI(dburl))
+	dburl := flag.String("mongo", "mongodb://localhost:27017", "Mongo connection string")
+	flag.Parse()
+	client, err := mongo.Connect(context.TODO(), options.Client().ApplyURI(*dburl))
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer client.Disconnect(context.TODO())
 	collection := client.Database(dbname).Collection(collectionname)
 
-	var result bson.M
-	var currentTime = time.Now()
 	var update bson.M
+	var now time.Time
 	page := 1
 	for {
 		body, err := GetPages(page)
 		if err != nil {
 			log.Fatalf("got all pages")
+			break
 		}
 		if len(body) == 0 {
 			break
@@ -78,55 +88,53 @@ func main() {
 		}
 
 		for _, product := range skus.Products {
+
+			productObjectID, err := primitive.ObjectIDFromHex(product.ID)
+			if err != nil {
+				log.Print(err)
+				continue
+			}
+
 			var ids []string
 			for _, comp := range product.Competitors {
 				ids = append(ids, comp.ID)
 			}
 			hashedidstring := CalcHash(ids)
 
-			filter := bson.M{"_id": product.ID}
-			if err = collection.FindOne(context.TODO(), filter).Decode(&result); err == nil {
-				//ako existva pravi slednoto
-				filter = bson.M{"hashedcompetitorsstring": hashedidstring}
+			now = time.Now()
 
-				if err = collection.FindOne(context.TODO(), filter).Decode(&result); err == nil {
-					filter = bson.M{"_id": product.ID}
+			err = collection.FindOne(context.TODO(), bson.M{"_id": productObjectID}).Decode(&ProductFromDb)
+			if err == nil {
+				if hashedidstring == ProductFromDb.HashedString {
+					update = bson.M{"$set": bson.M{"last_checked": now}}
+				} else {
 					update = bson.M{
 						"$set": bson.M{
-							"oid":                     product.ID,
 							"hashedcompetitorsstring": hashedidstring,
-							"last_checked":            currentTime,
+							"last_checked":            now,
+							"last_update":             now,
 						},
 					}
-					_, err = collection.UpdateByID(context.TODO(), filter, update)
-					if err != nil {
-						log.Fatalf("failed to insert new time into mongodb %v", err)
-					}
-					fmt.Printf("time checked updated for product %s", product.ID)
-
-				} else if err = collection.FindOne(context.TODO(), filter).Decode(&result); err != nil {
-					filter = bson.M{"_id": product.ID}
-					update = bson.M{
-						"set": bson.M{
-							"oid":                     product.ID,
-							"hashedcompetitorsstring": hashedidstring,
-							"last_checked":            currentTime,
-							"last_update":             currentTime,
-						},
-					}
-					fmt.Printf("updated time for checked and last update  for product %s", product.ID)
 				}
-			} else {
+				_, err = collection.UpdateByID(context.TODO(), productObjectID, update)
+				if err != nil {
+					log.Printf("failed to update product %s %v", product.ID, err)
+					continue
+				}
+				fmt.Printf("updated product %s.", product.ID)
+
+			} else if err == mongo.ErrNoDocuments {
 				_, err = collection.InsertOne(context.TODO(), bson.M{
-					"oid":                     product.ID,
+					"_id":                     productObjectID,
 					"hashedcompetitorsstring": hashedidstring,
-					"last_checked":            currentTime,
-					"last_update":             currentTime,
+					"last_checked":            now,
+					"last_update":             now,
 				})
 				if err != nil {
 					log.Fatalf("failed to insert into mongodb %v", err)
 				}
 				fmt.Printf("data for product %s inserver \n", product.ID)
+
 			}
 
 		}
