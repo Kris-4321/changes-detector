@@ -269,6 +269,14 @@ func main() {
 		checked += len(products)
 	}
 
+	changesColl.InsertOne(context.TODO(), bson.M{
+		"date":     time.Now(),
+		"added":    freshMatches,
+		"removed ": removedMatches,
+		"checked":  checked,
+		"updated":  updatedIDs,
+	})
+
 	if updatedIDs == 0 {
 		log.Print("No changed items found")
 	} else {
