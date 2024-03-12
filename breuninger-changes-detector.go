@@ -259,19 +259,18 @@ func main() {
 		close(results)
 	}()
 
-	// checkresultsChan := make(chan CheckResult)
+	checkresultsChan := make(chan CheckResult)
 
 	var wgprocessingpProducts sync.WaitGroup
 
-	updatedIDs := 0
-	freshMatches := 0
-	removedMatches := 0
-	checked := 0
-	for i := 0; i < 50; i++ {
+	for i := 0; i < 10; i++ {
 		wgprocessingpProducts.Add(1)
 		go func() {
 			defer wgprocessingpProducts.Done()
-
+			updatedIDs := 0
+			freshMatches := 0
+			removedMatches := 0
+			checked := 0
 			for products := range results {
 				for _, product := range products {
 					if fresh, missing, isChanged := CheckForChanges(product, snapshotColl); isChanged {
@@ -279,38 +278,37 @@ func main() {
 						freshMatches += fresh
 						removedMatches += missing
 					}
+					checked++
 				}
-				checked += len(products)
-
 			}
-			// checkresultsChan <- CheckResult{FreshMatches: freshMatches, removedMatches: removedMatches, UpdatedIDs: updatedIDs, checked: checked}
+			checkresultsChan <- CheckResult{FreshMatches: freshMatches, removedMatches: removedMatches, UpdatedIDs: updatedIDs, checked: checked}
 		}()
 	}
 	go func() {
 		wgprocessingpProducts.Wait()
-		// close(checkresultsChan)
+		close(checkresultsChan)
 	}()
 
-	// updated, fresh, missing, checked := 0, 0, 0, 0
-	// for results := range checkresultsChan {
-	// 	updated += results.UpdatedIDs
-	// 	fresh += results.FreshMatches
-	// 	missing += results.removedMatches
-	// 	checked += results.checked
-	// }
+	updated, fresh, missing, checked := 0, 0, 0, 0
+	for results := range checkresultsChan {
+		updated += results.UpdatedIDs
+		fresh += results.FreshMatches
+		missing += results.removedMatches
+		checked += results.checked
+	}
 
 	changesColl.InsertOne(context.TODO(), bson.M{
 		"date":     time.Now(),
-		"added":    freshMatches,
-		"removed ": removedMatches,
+		"added":    fresh,
+		"removed ": missing,
 		"checked":  checked,
-		"updated":  updatedIDs,
+		"updated":  updated,
 	})
 
-	if updatedIDs == 0 {
+	if updated == 0 {
 		log.Print("No changed items found")
 	} else {
-		log.Printf("Total changed items: %d", updatedIDs)
+		log.Printf("Total changed items: %d", updated)
 	}
 	end := time.Now()
 	fmt.Println(end.Sub(start))
