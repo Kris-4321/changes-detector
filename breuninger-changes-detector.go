@@ -263,7 +263,7 @@ func main() {
 
 	var wgprocessingpProducts sync.WaitGroup
 
-	for i := 0; i < 10; i++ {
+	for i := 0; i < 5; i++ {
 		wgprocessingpProducts.Add(1)
 		go func() {
 			defer wgprocessingpProducts.Done()
@@ -278,7 +278,7 @@ func main() {
 						freshMatches += fresh
 						removedMatches += missing
 					}
-					checked++
+					checked += len(products)
 				}
 			}
 			checkresultsChan <- CheckResult{FreshMatches: freshMatches, removedMatches: removedMatches, UpdatedIDs: updatedIDs, checked: checked}
