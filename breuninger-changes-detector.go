@@ -260,10 +260,20 @@ func main() {
 	}()
 
 	checkresultsChan := make(chan CheckResult)
-
+	ProdChan := make(chan Product)
+	numgoroutines := 50
 	var wgprocessingpProducts sync.WaitGroup
 
-	for i := 0; i < 5; i++ {
+	go func() {
+		for products := range results {
+			for _, product := range products {
+				ProdChan <- product
+			}
+		}
+		close(ProdChan)
+	}()
+
+	for i := 0; i < numgoroutines; i++ {
 		wgprocessingpProducts.Add(1)
 		go func() {
 			defer wgprocessingpProducts.Done()
@@ -271,15 +281,14 @@ func main() {
 			freshMatches := 0
 			removedMatches := 0
 			checked := 0
-			for products := range results {
-				for _, product := range products {
-					if fresh, missing, isChanged := CheckForChanges(product, snapshotColl); isChanged {
-						updatedIDs++
-						freshMatches += fresh
-						removedMatches += missing
-					}
-					checked += len(products)
+
+			for product := range ProdChan {
+				if fresh, missing, isChanged := CheckForChanges(product, snapshotColl); isChanged {
+					updatedIDs++
+					freshMatches += fresh
+					removedMatches += missing
 				}
+				checked++
 			}
 			checkresultsChan <- CheckResult{FreshMatches: freshMatches, removedMatches: removedMatches, UpdatedIDs: updatedIDs, checked: checked}
 		}()
