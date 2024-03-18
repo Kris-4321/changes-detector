@@ -196,6 +196,26 @@ func ProcessPage(wg *sync.WaitGroup, jobs <-chan int, results chan<- []Product, 
 	}
 }
 
+func processingWorker(results <-chan []Product, checkresultsChan chan<- CheckResult, snapshotColl *mongo.Collection, wg *sync.WaitGroup) {
+	defer wg.Done()
+	updatedIDs := 0
+	freshMatches := 0
+	removedMatches := 0
+	checked := 0
+
+	for products := range results {
+		for _, product := range products {
+			if fresh, missing, isChanged := CheckForChanges(product, snapshotColl); isChanged {
+				updatedIDs++
+				freshMatches += fresh
+				removedMatches += missing
+			}
+			checked++
+		}
+	}
+	checkresultsChan <- CheckResult{FreshMatches: freshMatches, removedMatches: removedMatches, UpdatedIDs: updatedIDs, checked: checked}
+}
+
 func main() {
 	start := time.Now()
 	connectionstring := flag.String("mongo", "mongodb://localhost:27017", "Mongo connection string")
@@ -260,38 +280,11 @@ func main() {
 	}()
 
 	checkresultsChan := make(chan CheckResult)
-	ProdChan := make(chan Product)
-	numgoroutines := 50
 	var wgprocessingpProducts sync.WaitGroup
 
-	go func() {
-		for products := range results {
-			for _, product := range products {
-				ProdChan <- product
-			}
-		}
-		close(ProdChan)
-	}()
-
-	for i := 0; i < numgoroutines; i++ {
+	for i := 0; i < 5; i++ {
 		wgprocessingpProducts.Add(1)
-		go func() {
-			defer wgprocessingpProducts.Done()
-			updatedIDs := 0
-			freshMatches := 0
-			removedMatches := 0
-			checked := 0
-
-			for product := range ProdChan {
-				if fresh, missing, isChanged := CheckForChanges(product, snapshotColl); isChanged {
-					updatedIDs++
-					freshMatches += fresh
-					removedMatches += missing
-				}
-				checked++
-			}
-			checkresultsChan <- CheckResult{FreshMatches: freshMatches, removedMatches: removedMatches, UpdatedIDs: updatedIDs, checked: checked}
-		}()
+		go processingWorker(results, checkresultsChan, snapshotColl, &wgprocessingpProducts)
 	}
 	go func() {
 		wgprocessingpProducts.Wait()
