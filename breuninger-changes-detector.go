@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -52,25 +53,14 @@ type CheckResult struct {
 	checked        int
 }
 
+type NumberOfPages struct {
+	NumberOfPages int `json:"number_of_pages"`
+}
+
 func CalcHash(ids []string) string {
 	joined := strings.Join(ids, "")
 	hash := sha256.Sum256([]byte(joined))
 	return hex.EncodeToString(hash[:])
-}
-
-func GetPage(page int) ([]byte, error) {
-	url := fmt.Sprintf("https://webapi.intelligencenode.com//breuninger?page=%d&app_key=213c06c51ed7df6fDEB", page)
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("end of pages")
-	}
-
-	return io.ReadAll(resp.Body)
 }
 
 func calcDifferences(old []string, current []string) (int, int) {
@@ -216,6 +206,39 @@ func processingWorker(results <-chan []Product, checkresultsChan chan<- CheckRes
 	checkresultsChan <- CheckResult{FreshMatches: freshMatches, removedMatches: removedMatches, UpdatedIDs: updatedIDs, checked: checked}
 }
 
+func GetPage(page int) ([]byte, error) {
+	url := fmt.Sprintf("https://webapi.intelligencenode.com//breuninger?page=%d&app_key=213c06c51ed7df6fDEB", page)
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("end of pages")
+	}
+
+	return io.ReadAll(resp.Body)
+}
+
+func GetPagesNumber() int {
+	url := "https://webapi.intelligencenode.com/breuninger?page=1&app_key=213c06c51ed7df6fDEB"
+	response, err := http.Get(url)
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer response.Body.Close()
+	body, err := ioutil.ReadAll(response.Body)
+	if err != nil {
+		log.Fatal(err)
+	}
+	var apiResponse NumberOfPages
+	if err := json.Unmarshal(body, &apiResponse); err != nil {
+		log.Fatal(err)
+	}
+	return apiResponse.NumberOfPages
+}
+
 func main() {
 	start := time.Now()
 	connectionstring := flag.String("mongo", "mongodb://localhost:27017", "Mongo connection string")
@@ -248,31 +271,22 @@ func main() {
 	defer client.Disconnect(context.TODO())
 	snapshotColl := client.Database(*dbname).Collection(collectionname)
 	changesColl := client.Database(*dbname).Collection("breuninger_changes_history")
-
 	var wg sync.WaitGroup
 	jobs := make(chan int, 100)
 	results := make(chan []Product, 100)
+
+	go func() {
+		pages := GetPagesNumber()
+		for i := 1; i <= pages; i++ {
+			jobs <- i
+		}
+		close(jobs)
+	}()
 
 	for w := 0; w < 5; w++ {
 		wg.Add(1)
 		go ProcessPage(&wg, jobs, results, snapshotColl)
 	}
-
-	go func() {
-		page := 1
-		for {
-			_, err := GetPage(page)
-			if err != nil {
-				if err.Error() == "end of pages" {
-					break
-				}
-				log.Printf("error getting page %d %v", page, err)
-			}
-			jobs <- page
-			page++
-		}
-		close(jobs)
-	}()
 
 	go func() {
 		wg.Wait()
@@ -298,13 +312,14 @@ func main() {
 		missing += results.removedMatches
 		checked += results.checked
 	}
-
+	end := time.Now()
 	changesColl.InsertOne(context.TODO(), bson.M{
-		"date":     time.Now(),
-		"added":    fresh,
-		"removed ": missing,
-		"checked":  checked,
-		"updated":  updated,
+		"date":            time.Now(),
+		"added":           fresh,
+		"removed ":        missing,
+		"checked":         checked,
+		"updated":         updated,
+		"time_to_execute": end.Sub(start).Seconds(),
 	})
 
 	if updated == 0 {
@@ -312,6 +327,5 @@ func main() {
 	} else {
 		log.Printf("Total changed items: %d", updated)
 	}
-	end := time.Now()
 	fmt.Println(end.Sub(start))
 }
