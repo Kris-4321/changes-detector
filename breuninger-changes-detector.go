@@ -283,7 +283,7 @@ func main() {
 		close(jobs)
 	}()
 
-	for w := 0; w < 5; w++ {
+	for w := 0; w < 20; w++ {
 		wg.Add(1)
 		go ProcessPage(&wg, jobs, results, snapshotColl)
 	}
